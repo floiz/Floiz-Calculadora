@@ -2966,36 +2966,48 @@ function processAndFillPNR(raw) {
     }
   }
 
-  // 2. CAPTURA DOS BILHETES (FA PAX ...), ETKT x EMD, por passageiro (/P1, /P2...)
-  const faRegex = /FA\s+PAX\s+([0-9]{3}-[0-9\-\/A-Z\.]+(?:\n\s+[^\n]+)*)/gi;
-  let faMatch;
-
+  // =========================================================================
+  // 2. CAPTURA DOS BILHETES (FA PAX ...) - CORRIGIDO
+  // =========================================================================
   const etBilhetesPorPassageiro = {};
   const emdBilhetesPorPassageiro = {};
 
-  while ((faMatch = faRegex.exec(texto)) !== null) {
-    const bloco = faMatch[1].replace(/\s+/g, "");
+  // Primeiro, isolamos todas as linhas FA PAX e removemos quebras de linha internas e espaços duplicados
+  // Isso junta o "/P2" que cai na linha de baixo de volta ao bilhete correspondente
+  const linhasFA = texto.match(/FA\s+PAX\s+[\s\S]*?(?=\n\s*\d+\s+FA|\n\s*\d+\s+[A-Z]{2}\s+\d|\n\s*\d+\s+FB|\n\s*\d+\s+FE|\n\/SSR|$)/gi);
 
-    const ticketMatch = bloco.match(/(\d{3}-\d{10,})/);
-    const tipoMatch = bloco.match(/\/(ET|DT)[A-Z0-9]{2}/i);
-    const paxMatch = bloco.match(/\/P(\d+)/i);
+  if (linhasFA) {
+    linhasFA.forEach(linhaBruta => {
+      // Limpa espaços e quebras internas para análise contínua
+      const linhaLimpa = linhaBruta.replace(/\s+/g, "");
 
-    if (!ticketMatch || !tipoMatch || !paxMatch) continue;
+      const ticketMatch = linhaLimpa.match(/(\d{3}-\d{10,})/);
+      const tipoMatch = linhaLimpa.match(/\/(ET|DT)[A-Z0-9]*/i);
+      const paxMatch = linhaLimpa.match(/\/P(\d+)/i);
 
-    const numero = ensureTicketHyphen(ticketMatch[1]);
-    const tipo = tipoMatch[1].toUpperCase(); // ET ou DT
-    const paxNum = parseInt(paxMatch[1], 10);
+      if (ticketMatch && tipoMatch && paxMatch) {
+        const numero = ensureTicketHyphen(ticketMatch[1]);
+        const tipo = tipoMatch[1].toUpperCase().slice(0, 2); // Garante extrair ET ou DT
+        const paxNum = parseInt(paxMatch[1], 10);
 
-    if (tipo === "ET") {
-      if (!etBilhetesPorPassageiro[paxNum]) etBilhetesPorPassageiro[paxNum] = [];
-      etBilhetesPorPassageiro[paxNum].push(numero);
-    } else if (tipo === "DT") {
-      if (!emdBilhetesPorPassageiro[paxNum]) emdBilhetesPorPassageiro[paxNum] = [];
-      emdBilhetesPorPassageiro[paxNum].push(numero);
-    }
+        if (tipo === "ET") {
+          if (!etBilhetesPorPassageiro[paxNum]) etBilhetesPorPassageiro[paxNum] = [];
+          if (!etBilhetesPorPassageiro[paxNum].includes(numero)) {
+            etBilhetesPorPassageiro[paxNum].push(numero);
+          }
+        } else if (tipo === "DT") {
+          if (!emdBilhetesPorPassageiro[paxNum]) emdBilhetesPorPassageiro[paxNum] = [];
+          if (!emdBilhetesPorPassageiro[paxNum].includes(numero)) {
+            emdBilhetesPorPassageiro[paxNum].push(numero);
+          }
+        }
+      }
+    });
   }
 
-  // 3. CAPTURA DOS PASSAGEIROS (ADT, CHD, INF) – múltiplos por linha
+  // =========================================================================
+  // 3. CAPTURA DOS PASSAGEIROS (ADT, CHD, INF) – Múltiplos por linha
+  // =========================================================================
   const paxRegex = /(\d+)\.\s*([A-ZÀ-Ü ]+\/[A-ZÀ-Ü ]+)(?:\s+(MR|MRS|MS|MISS|CHD|INF|IN|CH))?/gi;
   let paxMatch;
 
@@ -3010,7 +3022,7 @@ function processAndFillPNR(raw) {
     const paxObjeto = {
       number: numeroPax,
       name: nomeCompleto,
-      ticket: etTickets[0] || "",      // principal: ETKT
+      ticket: etTickets[0] || "",      // principal: Primeiro ETKT encontrado para este Px
       etickets: etTickets,             // todos ETKT
       emds: emdTickets                 // todos EMD
     };
