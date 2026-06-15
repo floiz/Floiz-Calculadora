@@ -2929,20 +2929,17 @@ function processAndFillPNR(raw) {
   let adtList = [];
   let chdList = [];
   let infList = [];
-  let bilhetesCapturados = [];
 
   // Normaliza quebras de linha para evitar diferenças entre GDS
   const texto = raw.replace(/\r\n/g, "\n");
 
   // 1. CAPTURA DO LOCALIZADOR
-  // Tenta padrão RP/...
   const rpLine = texto.match(/^RP\/.*$/m);
   if (rpLine) {
     const locMatch = rpLine[0].match(/\s([A-Z0-9]{6})\s*$/);
     if (locMatch) localizador = locMatch[1];
   }
 
-  // Fallback: qualquer bloco de 6 caracteres alfanuméricos que não seja palavra reservada
   if (!localizador) {
     const anyLoc = texto.match(/\b[A-Z0-9]{6}\b/g);
     if (anyLoc) {
@@ -2969,51 +2966,65 @@ function processAndFillPNR(raw) {
     }
   }
 
-  // 2. CAPTURA DOS BILHETES (FA PAX ...), incluindo linhas quebradas
-  // Junta linhas de FA PAX que podem vir quebradas
-  const faBlockRegex = /FA\s+PAX\s+([0-9]{3}-[0-9\-\/A-Z\.]+(?:\n\s+[^\n]+)*)/gi;
-  let faBlockMatch;
-  while ((faBlockMatch = faBlockRegex.exec(texto)) !== null) {
-    const bloco = faBlockMatch[1].replace(/\s+/g, "");
+  // 2. CAPTURA DOS BILHETES (FA PAX ...), ETKT x EMD, por passageiro (/P1, /P2...)
+  const faRegex = /FA\s+PAX\s+([0-9]{3}-[0-9\-\/A-Z\.]+(?:\n\s+[^\n]+)*)/gi;
+  let faMatch;
+
+  const etBilhetesPorPassageiro = {};
+  const emdBilhetesPorPassageiro = {};
+
+  while ((faMatch = faRegex.exec(texto)) !== null) {
+    const bloco = faMatch[1].replace(/\s+/g, "");
+
     const ticketMatch = bloco.match(/(\d{3}-\d{10,})/);
-    if (ticketMatch) {
-      bilhetesCapturados.push(ensureTicketHyphen(ticketMatch[1]));
+    const tipoMatch = bloco.match(/\/(ET|DT)[A-Z0-9]{2}/i);
+    const paxMatch = bloco.match(/\/P(\d+)/i);
+
+    if (!ticketMatch || !tipoMatch || !paxMatch) continue;
+
+    const numero = ensureTicketHyphen(ticketMatch[1]);
+    const tipo = tipoMatch[1].toUpperCase(); // ET ou DT
+    const paxNum = parseInt(paxMatch[1], 10);
+
+    if (tipo === "ET") {
+      if (!etBilhetesPorPassageiro[paxNum]) etBilhetesPorPassageiro[paxNum] = [];
+      etBilhetesPorPassageiro[paxNum].push(numero);
+    } else if (tipo === "DT") {
+      if (!emdBilhetesPorPassageiro[paxNum]) emdBilhetesPorPassageiro[paxNum] = [];
+      emdBilhetesPorPassageiro[paxNum].push(numero);
     }
   }
 
   // 3. CAPTURA DOS PASSAGEIROS (ADT, CHD, INF) – múltiplos por linha
-  // Ex.: "1.COSTA/GILMAR MR   2.SILVA/ADALGISA MRS"
   const paxRegex = /(\d+)\.\s*([A-ZÀ-Ü ]+\/[A-ZÀ-Ü ]+)(?:\s+(MR|MRS|MS|MISS|CHD|INF|IN|CH))?/gi;
   let paxMatch;
-  let counter = 0;
 
   while ((paxMatch = paxRegex.exec(texto)) !== null) {
     const numeroPax = parseInt(paxMatch[1], 10);
     const nomeCompleto = normalizePaxName(paxMatch[2]);
     const tipoBruto = (paxMatch[3] || "").toUpperCase().trim();
 
-    const bilheteVinculado = bilhetesCapturados[counter] || "";
-    const paxObjeto = { number: numeroPax, name: nomeCompleto, ticket: bilheteVinculado };
+    const etTickets = etBilhetesPorPassageiro[numeroPax] || [];
+    const emdTickets = emdBilhetesPorPassageiro[numeroPax] || [];
 
-    let tipoPax;
+    const paxObjeto = {
+      number: numeroPax,
+      name: nomeCompleto,
+      ticket: etTickets[0] || "",      // principal: ETKT
+      etickets: etTickets,             // todos ETKT
+      emds: emdTickets                 // todos EMD
+    };
 
     if (tipoBruto === "INF" || tipoBruto === "IN") {
-      tipoPax = "INF";
       infList.push(paxObjeto);
     } else if (tipoBruto === "CHD" || tipoBruto === "CH") {
-      tipoPax = "CHD";
       chdList.push(paxObjeto);
     } else {
-      // Se não tiver sufixo (MR/MRS etc.), assume ADT
-      tipoPax = "ADT";
       adtList.push(paxObjeto);
     }
-
-    counter++;
   }
 
   // 4. CAPTURA DA COMPANHIA AÉREA PELO SEGMENTO
-  // Ex.: "3  UX 058 A 22JUN..."
   const segRegex = /^\s*\d+\s+([A-Z0-9]{2})\s*\d{1,4}/m;
   const segMatch = segRegex.exec(texto);
   if (segMatch && segMatch[1]) {
@@ -3035,7 +3046,6 @@ function processAndFillPNR(raw) {
     if (fieldChd) fieldChd.value = chdList.length;
     if (fieldInf) fieldInf.value = infList.length;
 
-    // 6. INJEÇÃO NO STORE JSON INTERNO
     const novoStore = {
       ADT: adtList,
       CHD: chdList,
@@ -3045,7 +3055,6 @@ function processAndFillPNR(raw) {
       setPaxStore(novoStore);
     }
 
-    // 7. GATILHOS DO SISTEMA
     if (typeof renderPaxFields === "function") renderPaxFields();
     if (typeof syncAggregateFromStore === "function") syncAggregateFromStore();
     if (typeof updateAll === "function") {
@@ -3059,7 +3068,7 @@ function processAndFillPNR(raw) {
   }
 }
 
-// Helpers sugeridos (caso ainda não existam)
+// Helpers
 function normalizePaxName(name) {
   return name
     .trim()
@@ -3068,7 +3077,6 @@ function normalizePaxName(name) {
 }
 
 function ensureTicketHyphen(ticket) {
-  // Garante formato 999-9999999999
   const clean = ticket.replace(/\s+/g, "");
   const m = clean.match(/^(\d{3})-?(\d{8,})$/);
   if (m) return `${m[1]}-${m[2]}`;
