@@ -2912,10 +2912,6 @@ document.getElementById("btnCarregarRACode").addEventListener("click", async ()=
         sel.addEventListener("change", () => apply(sel.value || "dark"));
       }
     })();
-// =========================================================================
-// INTEGRAÇÃO DE CAPTURA E DECODIFICAÇÃO DE PNR (GDS / TEXTO BRUTO)
-// =========================================================================
-
 document.addEventListener("DOMContentLoaded", () => {
   const pnrInputElement = document.getElementById("pnrInput");
   if (pnrInputElement) {
@@ -2935,66 +2931,91 @@ function processAndFillPNR(raw) {
   let infList = [];
   let bilhetesCapturados = [];
 
-  // 1. CAPTURA DO LOCALIZADOR (Padrão RP/... ou qualquer bloco de 6 caracteres alfanuméricos)
-  const rpLine = raw.match(/^RP\/.*$/m);
+  // Normaliza quebras de linha para evitar diferenças entre GDS
+  const texto = raw.replace(/\r\n/g, "\n");
+
+  // 1. CAPTURA DO LOCALIZADOR
+  // Tenta padrão RP/...
+  const rpLine = texto.match(/^RP\/.*$/m);
   if (rpLine) {
     const locMatch = rpLine[0].match(/\s([A-Z0-9]{6})\s*$/);
     if (locMatch) localizador = locMatch[1];
   }
+
+  // Fallback: qualquer bloco de 6 caracteres alfanuméricos que não seja palavra reservada
   if (!localizador) {
-    // Procura por blocos isolados de 6 caracteres ignorando palavras reservadas comuns de sistema
-    const anyLoc = raw.match(/\b[A-Z0-9]{6}\b/g);
+    const anyLoc = texto.match(/\b[A-Z0-9]{6}\b/g);
     if (anyLoc) {
       for (const possibleLoc of anyLoc) {
-        if (!/^(FLIGHT|FLGHT|STATUS|CLASS|ETKTS|ETKTS|E-TKT|BOOKED)$/i.test(possibleLoc) && !/^\d+$/.test(possibleLoc) && !/^[A-Za-z]+$/.test(possibleLoc)) {
+        if (
+          !/^(FLIGHT|FLGHT|STATUS|CLASS|ETKTS|E-TKT|BOOKED)$/i.test(possibleLoc) &&
+          !/^\d+$/.test(possibleLoc) &&
+          !/^[A-Za-z]+$/.test(possibleLoc)
+        ) {
           localizador = possibleLoc;
           break;
         }
       }
     }
   }
+
   if (localizador) {
     const locField = document.getElementById("loc");
     if (locField) {
       locField.value = localizador.toUpperCase();
-      forceUpperKeepCursor(locField);
+      if (typeof forceUpperKeepCursor === "function") {
+        forceUpperKeepCursor(locField);
+      }
     }
   }
 
-  // 2. CAPTURA DOS BILHETES (Padrão FA PAX ...)
-  const faRegex = /FA\s+PAX\s+(\d{3}-[0-9\-]+)/g;
-  let faMatch;
-  while ((faMatch = faRegex.exec(raw)) !== null) {
-    bilhetesCapturados.push(ensureTicketHyphen(faMatch[1]));
+  // 2. CAPTURA DOS BILHETES (FA PAX ...), incluindo linhas quebradas
+  // Junta linhas de FA PAX que podem vir quebradas
+  const faBlockRegex = /FA\s+PAX\s+([0-9]{3}-[0-9\-\/A-Z\.]+(?:\n\s+[^\n]+)*)/gi;
+  let faBlockMatch;
+  while ((faBlockMatch = faBlockRegex.exec(texto)) !== null) {
+    const bloco = faBlockMatch[1].replace(/\s+/g, "");
+    const ticketMatch = bloco.match(/(\d{3}-\d{10,})/);
+    if (ticketMatch) {
+      bilhetesCapturados.push(ensureTicketHyphen(ticketMatch[1]));
+    }
   }
 
-  // 3. CAPTURA DOS PASSAGEIROS E SEUS RESPECTIVOS TIPOS (ADT, CHD, INF)
-  // Expressão regular aprimorada para capturar linhas de numeração do GDS (Ex: 1.  SILVA/JOAO MR)
-  const paxRegex = /^\s*\d\.\s*([A-Z ]+\/[A-Z ]+)\s+([A-Z]{2,3})/gm;
+  // 3. CAPTURA DOS PASSAGEIROS (ADT, CHD, INF) – múltiplos por linha
+  // Ex.: "1.COSTA/GILMAR MR   2.SILVA/ADALGISA MRS"
+  const paxRegex = /(\d+)\.\s*([A-ZÀ-Ü ]+\/[A-ZÀ-Ü ]+)(?:\s+(MR|MRS|MS|MISS|CHD|INF|IN|CH))?/gi;
   let paxMatch;
   let counter = 0;
 
-  while ((paxMatch = paxRegex.exec(raw)) !== null) {
-    const nomeCompleto = normalizePaxName(paxMatch[1]);
-    const tipoPax = paxMatch[2].toUpperCase().trim();
-    
-    // Vincula o bilhete capturado ao índice do passageiro atual, se disponível
-    const bilheteVinculado = bilhetesCapturados[counter] || "";
-    const paxObjeto = { name: nomeCompleto, ticket: bilheteVinculado };
+  while ((paxMatch = paxRegex.exec(texto)) !== null) {
+    const numeroPax = parseInt(paxMatch[1], 10);
+    const nomeCompleto = normalizePaxName(paxMatch[2]);
+    const tipoBruto = (paxMatch[3] || "").toUpperCase().trim();
 
-    if (tipoPax === "INF" || tipoPax === "IN") {
+    const bilheteVinculado = bilhetesCapturados[counter] || "";
+    const paxObjeto = { number: numeroPax, name: nomeCompleto, ticket: bilheteVinculado };
+
+    let tipoPax;
+
+    if (tipoBruto === "INF" || tipoBruto === "IN") {
+      tipoPax = "INF";
       infList.push(paxObjeto);
-    } else if (tipoPax === "CHD" || tipoPax === "CH") {
+    } else if (tipoBruto === "CHD" || tipoBruto === "CH") {
+      tipoPax = "CHD";
       chdList.push(paxObjeto);
     } else {
+      // Se não tiver sufixo (MR/MRS etc.), assume ADT
+      tipoPax = "ADT";
       adtList.push(paxObjeto);
     }
+
     counter++;
   }
 
-  // 4. ATUALIZAÇÃO DA COMPANHIA AÉREA BASEADO NO ITINERÁRIO
-  const segRegex = /^\s*\d+\s+([A-Z0-9]{2})\s*([0-9]{1,4})/gm;
-  const segMatch = segRegex.exec(raw);
+  // 4. CAPTURA DA COMPANHIA AÉREA PELO SEGMENTO
+  // Ex.: "3  UX 058 A 22JUN..."
+  const segRegex = /^\s*\d+\s+([A-Z0-9]{2})\s*\d{1,4}/m;
+  const segMatch = segRegex.exec(texto);
   if (segMatch && segMatch[1]) {
     ciaAerea = segMatch[1].toUpperCase().trim();
     const ciaField = document.getElementById("cia");
@@ -3004,7 +3025,7 @@ function processAndFillPNR(raw) {
     }
   }
 
-  // 5. ATUALIZAÇÃO DAS QUANTIDADES NOS INPUTS MESTRES DO SISTEMA
+  // 5. ATUALIZAÇÃO DAS QUANTIDADES
   if (adtList.length > 0 || chdList.length > 0 || infList.length > 0) {
     const fieldAdt = document.getElementById("paxq_adt");
     const fieldChd = document.getElementById("paxq_chd");
@@ -3014,24 +3035,42 @@ function processAndFillPNR(raw) {
     if (fieldChd) fieldChd.value = chdList.length;
     if (fieldInf) fieldInf.value = infList.length;
 
-    // 6. INJEÇÃO DIRETAMENTE NO REPOSITÓRIO JSON INTERNO (`pax_json`)
+    // 6. INJEÇÃO NO STORE JSON INTERNO
     const novoStore = {
       ADT: adtList,
       CHD: chdList,
       INF: infList
     };
-    setPaxStore(novoStore);
+    if (typeof setPaxStore === "function") {
+      setPaxStore(novoStore);
+    }
 
-    // 7. DESPARO DOS GATILHOS DA SUITE DE ATUALIZAÇÃO DO SEU SISTEMA
+    // 7. GATILHOS DO SISTEMA
     if (typeof renderPaxFields === "function") renderPaxFields();
     if (typeof syncAggregateFromStore === "function") syncAggregateFromStore();
     if (typeof updateAll === "function") {
-      invalidateCRR5OnEdit();
+      if (typeof invalidateCRR5OnEdit === "function") invalidateCRR5OnEdit();
       updateAll();
     }
 
     if (typeof showToast === "function") {
-      showToast("PNR Importado com Sucesso!");
+      showToast("PNR importado com sucesso!");
     }
   }
+}
+
+// Helpers sugeridos (caso ainda não existam)
+function normalizePaxName(name) {
+  return name
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+function ensureTicketHyphen(ticket) {
+  // Garante formato 999-9999999999
+  const clean = ticket.replace(/\s+/g, "");
+  const m = clean.match(/^(\d{3})-?(\d{8,})$/);
+  if (m) return `${m[1]}-${m[2]}`;
+  return clean;
 }
