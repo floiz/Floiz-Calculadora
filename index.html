@@ -918,15 +918,8 @@ h1{ margin:0 0 6px; font-size: 20px; font-weight: 800; letter-spacing:.2px; }
 
 <div class="hr"></div>
 
-
-
         <!-- COMMON -->
         <div class="grid">
-          <div class="grid3" style="grid-column: 1 / -1;">
-  <div style="grid-column: 1 / -1; margin-bottom: 10px;">
-    <label style="color: #6d28d9; font-weight: bold;">Importar PNR (Texto GDS / Cia)</label>
-    <textarea id="pnrInput" placeholder="Cole o PNR bruto aqui para preencher o formulário automaticamente..." style="min-height: 80px; width: 100%; font-family: monospace; font-size: 13px;"></textarea>
-  </div>
           <div id="ciaWrap">
             <label>Cia aérea</label>
 
@@ -953,6 +946,12 @@ h1{ margin:0 0 6px; font-size: 20px; font-weight: 800; letter-spacing:.2px; }
 
             <input id="cia" placeholder="Ex.: LA / G3 / AD / TP..." />
 </div>
+
+  <div style="grid-column: 1 / -1; margin-bottom: 10px;">
+    <label style="color: #6d28d9; font-weight: bold;">Importar PNR (Texto GDS / Cia)</label>
+    <textarea id="pnrInput" placeholder="Cole o PNR bruto aqui para preencher o formulário automaticamente..." style="min-height: 80px; width: 100%; font-family: monospace; font-size: 13px;"></textarea>
+  </div>
+
 <div class="grid3" style="grid-column: 1 / -1;">
             <div>
               <label>Localizador (LOC)</label>
@@ -4250,6 +4249,8 @@ document.getElementById("btnCarregarRACode").addEventListener("click", async ()=
 
 
     
+//função para processar PNR colado no campo de texto
+    
   const pnrInputElement = document.getElementById("pnrInput");
   if (pnrInputElement) {
     pnrInputElement.addEventListener("input", (e) => {
@@ -4431,7 +4432,6 @@ function ensureTicketHyphen(ticket) {
   if (m) return `${m[1]}-${m[2]}`;
   return clean;
 }
-
 </script>
 </body>
 </html>
